@@ -1,0 +1,21 @@
+venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+.env
+.DS_Store
+.coverage
+.pytest_cache/
+.vscode/
+.idea/
+
+# Generated files (keep minimal for repo)
+models/
+plans/
+migrations/
+reports/
+docs/_build/
+*.pyc
+*.pyo
+
