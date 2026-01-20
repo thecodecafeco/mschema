@@ -1,0 +1,11 @@
+typer[all]>=0.12.0
+rich>=13.7.0
+beanie>=1.25.0
+motor>=3.4.0
+pymongo>=4.6.1
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+pyyaml>=6.0.1
+jsonschema>=4.20.0
+google-generativeai>=0.3.2
+python-dotenv>=1.0.1
