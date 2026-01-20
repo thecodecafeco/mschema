@@ -1,0 +1,35 @@
+name: Schema Drift Check
+
+on:
+  pull_request:
+    paths:
+      - "schemas/**"
+  push:
+    branches:
+      - main
+  schedule:
+    # Run daily to catch drift that happens outside of code changes
+    - cron: '0 0 * * *'
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install MongoSchematic
+        run: pip install mongo-schematic
+      
+      - name: Check for Schema Drift
+        env:
+          MSCHEMA_MONGODB_URI: ${{ secrets.STAGING_MONGODB_URI }}
+          MSCHEMA_DEFAULT_DB: myapp
+        run: |
+          # Detect drift against all schemas in the schemas/ directory
+          # Fails if critical drift (type mismatches) is found
+          mschema db drift --schema-dir schemas/ --sample 5000

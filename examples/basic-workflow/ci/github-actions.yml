@@ -1,0 +1,22 @@
+name: Schema Validation
+on:
+  pull_request:
+    paths:
+      - "schemas/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: pip install mongo-schematic
+      - name: Validate schema against staging
+        env:
+          SCHEMAGEN_MONGODB_URI: ${{ secrets.STAGING_MONGODB_URI }}
+          SCHEMAGEN_DEFAULT_DB: myapp
+        run: |
+          schemagen validate test \
+            --schema schemas/users.v1.yml \
+            --collection users \
+            --sample 20000

@@ -1,0 +1,20 @@
+database: myapp
+collection: users
+schema:
+  type: object
+  required:
+    - email
+    - createdAt
+  properties:
+    email:
+      bsonType: string
+      presence: 0.99
+      nullable: false
+    createdAt:
+      bsonType: date
+      presence: 0.98
+      nullable: false
+    fullName:
+      bsonType: string
+      presence: 0.95
+      nullable: false

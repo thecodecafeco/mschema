@@ -1,0 +1,118 @@
+database: mercury
+collection: users
+total_documents: 205
+sampled_documents: 205
+sample_size: 10000
+schema:
+  type: object
+  properties:
+    business_id:
+      bsonType: objectId
+      presence: 1.0
+      nullable: true
+    created_at:
+      bsonType: date
+      presence: 1.0
+      nullable: false
+    email:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    name:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    is_active:
+      bsonType: bool
+      presence: 1.0
+      nullable: false
+    password:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    role:
+      bsonType: objectId
+      presence: 1.0
+      nullable: true
+    deletion_requested:
+      bsonType: bool
+      presence: 1.0
+      nullable: false
+    tier:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    business_info_verified:
+      bsonType: bool
+      presence: 0.7707
+      nullable: false
+    bvn_verified:
+      bsonType: bool
+      presence: 0.7707
+      nullable: false
+    nin_verified:
+      bsonType: bool
+      presence: 0.7707
+      nullable: false
+    has_2fa_enabled:
+      bsonType: object
+      presence: 0.0244
+      nullable: true
+    fcm_token:
+      bsonType: string
+      presence: 0.1317
+      nullable: true
+    referral_code:
+      bsonType: string
+      presence: 0.0195
+      nullable: false
+  required:
+  - created_at
+  - email
+  - name
+  - is_active
+  - password
+  - deletion_requested
+  - tier
+anomalies:
+- type: HIGH_NULL_RATE
+  field: business_id
+  details:
+    null_rate: 0.5659
+- type: HIGH_NULL_RATE
+  field: role
+  details:
+    null_rate: 0.5659
+- type: HIGH_NULL_RATE
+  field: deleted_at
+  details:
+    null_rate: 1.0
+- type: LOW_PRESENCE
+  field: has_2fa_enabled
+  details:
+    presence: 0.0244
+- type: LOW_PRESENCE
+  field: has_2fa_enabled.is_active
+  details:
+    presence: 0.0049
+- type: LOW_PRESENCE
+  field: has_2fa_enabled.mfa_type
+  details:
+    presence: 0.0049
+- type: LOW_PRESENCE
+  field: has_2fa_enabled.secret_key
+  details:
+    presence: 0.0049
+- type: LOW_PRESENCE
+  field: referral_code
+  details:
+    presence: 0.0195
+recommendations:
+- type: BEST_PRACTICE
+  title: Add _schemaVersion field
+  details:
+    field: _schemaVersion
+    bsonType: int
+    default: 1
+confidence: 0.84
+analyzed_at: '2026-01-19T23:37:38.864758'

@@ -1,0 +1,210 @@
+database: mercury
+collection: inventory_items
+total_documents: 775
+sampled_documents: 775
+sample_size: 10000
+schema:
+  type: object
+  properties:
+    SKU:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    name:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    description:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    price:
+      bsonType: int
+      presence: 1.0
+      nullable: false
+    quantity_in_stock:
+      bsonType: int
+      presence: 1.0
+      nullable: false
+    reorder_point:
+      bsonType: int
+      presence: 1.0
+      nullable: false
+    reorder_quantity:
+      bsonType: int
+      presence: 1.0
+      nullable: false
+    unit_of_measure:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    category_id:
+      bsonType: objectId
+      presence: 1.0
+      nullable: false
+    owned_by:
+      bsonType: objectId
+      presence: 1.0
+      nullable: false
+    barcode_ref:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    barcode:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    image_url:
+      bsonType: string
+      presence: 1.0
+      nullable: false
+    reserved:
+      bsonType: int
+      presence: 1.0
+      nullable: false
+    visible:
+      bsonType: bool
+      presence: 1.0
+      nullable: false
+    variant_combinations:
+      bsonType: array
+      presence: 0.8542
+      nullable: true
+    variations:
+      bsonType: array
+      presence: 0.8542
+      nullable: true
+    has_variations:
+      bsonType: bool
+      presence: 0.84
+      nullable: false
+    slug:
+      bsonType: string
+      presence: 0.8594
+      nullable: false
+    weight:
+      bsonType: double
+      presence: 0.8077
+      nullable: false
+    quantity:
+      bsonType: int
+      presence: 0.0026
+      nullable: false
+  required:
+  - SKU
+  - name
+  - description
+  - price
+  - quantity_in_stock
+  - reorder_point
+  - reorder_quantity
+  - unit_of_measure
+  - category_id
+  - owned_by
+  - barcode_ref
+  - barcode
+  - image_url
+  - reserved
+  - visible
+anomalies:
+- type: MULTIPLE_TYPES
+  field: price
+  details: &id001
+    double: 35
+    int: 740
+- type: MULTIPLE_TYPES
+  field: category_id
+  details: &id002
+    objectId: 773
+    string: 2
+- type: MULTIPLE_TYPES
+  field: image_url
+  details: &id003
+    string: 749
+    array: 26
+- type: MULTIPLE_TYPES
+  field: variant_combinations[].price_adjustment
+  details: &id004
+    double: 82
+    int: 33
+- type: LOW_PRESENCE
+  field: variations[].registry_id
+  details:
+    presence: 0.0452
+- type: LOW_PRESENCE
+  field: variations[].display_name
+  details:
+    presence: 0.0452
+- type: LOW_PRESENCE
+  field: variations[].required
+  details:
+    presence: 0.0465
+- type: LOW_PRESENCE
+  field: variations[].display_order
+  details:
+    presence: 0.0465
+- type: LOW_PRESENCE
+  field: variations[].max_length
+  details:
+    presence: 0.0452
+- type: LOW_PRESENCE
+  field: quantity
+  details:
+    presence: 0.0026
+- type: MULTIPLE_TYPES
+  field: variant_combinations[].image_url
+  details: &id005
+    string: 7
+    array: 10
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.Type
+  details:
+    presence: 0.0026
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.size
+  details:
+    presence: 0.0219
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.Color
+  details:
+    presence: 0.0052
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.Syrup
+  details:
+    presence: 0.0039
+- type: LOW_PRESENCE
+  field: 'variant_combinations[].combination.Size '
+  details:
+    presence: 0.0039
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.Front Design
+  details:
+    presence: 0.0065
+- type: LOW_PRESENCE
+  field: variant_combinations[].combination.Back Design
+  details:
+    presence: 0.0065
+recommendations:
+- type: BEST_PRACTICE
+  title: Add _schemaVersion field
+  details:
+    field: _schemaVersion
+    bsonType: int
+    default: 1
+- type: DATA_QUALITY
+  title: Standardize type for price
+  details: *id001
+- type: DATA_QUALITY
+  title: Standardize type for category_id
+  details: *id002
+- type: DATA_QUALITY
+  title: Standardize type for image_url
+  details: *id003
+- type: DATA_QUALITY
+  title: Standardize type for variant_combinations[].price_adjustment
+  details: *id004
+- type: DATA_QUALITY
+  title: Standardize type for variant_combinations[].image_url
+  details: *id005
+confidence: 0.82
+analyzed_at: '2026-01-20T12:41:28.746363'
