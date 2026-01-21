@@ -14,6 +14,13 @@ def _get_ts_type(bson_type: str) -> str:
         "null": "null",
         "long": "number",
         "decimal": "number",
+        "binData": "Buffer",
+        "regex": "RegExp",
+        "timestamp": "Date",
+        "minKey": "any",
+        "maxKey": "any",
+        "javascript": "string",
+        "dbPointer": "string",
     }
     return mapping.get(bson_type, "any")
 
@@ -37,8 +44,13 @@ def generate_typescript_code(schema: Dict[str, Any], interface_name: str = "Inte
         for field_name, field_def in schema_props.items():
             bson_type = field_def.get("bsonType", "any")
             
+            # Handle union types (list of bsonTypes)
+            if isinstance(bson_type, list):
+                # Generate union type for multiple types
+                type_list = [_get_ts_type(t) for t in bson_type]
+                ts_type = " | ".join(type_list)
             # Handle nested objects
-            if bson_type == "object":
+            elif bson_type == "object":
                 # Check inner properties if available (current schema structure permitting)
                  if "properties" in field_def:
                     nested_name = f"{curr_name}{field_name.capitalize()}"

@@ -5,6 +5,7 @@ Complete guide for MongoDB schema analysis, drift detection, and migrations.
 ## Table of Contents
 
 - [Getting Started](#getting-started)
+- [Supported BSON Types](#supported-bson-types)
 - [Single Collection Workflows](#single-collection-workflows)
 - [Database-Wide Workflows](#database-wide-workflows)
 - [CI/CD Integration](#cicd-integration)
@@ -31,12 +32,32 @@ default_db: "myapp"
 gemini_api_key: ""  # Optional, for AI recommendations
 ```
 
-Or use environment variables:
+#### Environment Variables
+
+You can also use environment variables (these take precedence over config files):
+
 ```bash
-export SCHEMAGEN_MONGODB_URI="mongodb://localhost:27017"
-export SCHEMAGEN_DEFAULT_DB="myapp"
-export SCHEMAGEN_GEMINI_API_KEY="your-key"
+export MSCHEMA_MONGODB_URI="mongodb://localhost:27017"
+export MSCHEMA_DEFAULT_DB="myapp"
+export MSCHEMA_GEMINI_API_KEY="your-key"
 ```
+
+#### Local Override File (Recommended for Local Testing)
+
+For safe local testing with production/staging credentials without risk of committing:
+
+1. Create `.mschema.local.yml` (automatically gitignored):
+   ```yaml
+   mongodb_uri: "mongodb+srv://prod-cluster..."
+   default_db: "production_db"
+   ```
+
+2. This file takes precedence over `.mschema.yml` but is overridden by environment variables.
+
+**Configuration Priority (highest to lowest):**
+1. Environment variables (`MSCHEMA_*`)
+2. `.mschema.local.yml` (local overrides, gitignored)
+3. `.mschema.yml` (committed defaults)
 
 ### First Analysis
 
@@ -44,6 +65,51 @@ export SCHEMAGEN_GEMINI_API_KEY="your-key"
 mschema init                              # Create config file
 mschema analyze --collection users        # Analyze a collection
 ```
+
+---
+
+## Supported BSON Types
+
+MongoSchematic supports all MongoDB BSON types:
+
+| Type | bsonType Alias | Description |
+|------|----------------|-------------|
+| String | `string` | UTF-8 encoded text |
+| Integer (32-bit) | `int` | 32-bit integer |
+| Integer (64-bit) | `long` | 64-bit integer |
+| Double | `double` | Floating-point number |
+| Decimal128 | `decimal` | High-precision decimal |
+| Boolean | `bool` | `true` or `false` |
+| Date | `date` | UTC datetime |
+| ObjectId | `objectId` | MongoDB ObjectId |
+| Array | `array` | Ordered list |
+| Object | `object` | Embedded document |
+| Binary | `binData` | Binary data |
+| Regular Expression | `regex` | Regex pattern |
+| Timestamp | `timestamp` | Internal MongoDB timestamp |
+| JavaScript | `javascript` | JavaScript code |
+| Min Key | `minKey` | Special comparison value |
+| Max Key | `maxKey` | Special comparison value |
+| DB Reference | `dbPointer` | Reference to another document |
+| Null | `null` | Null value |
+
+### Union Types
+
+When a field can have multiple types, use an array of types instead of `"mixed"`:
+
+```yaml
+# Schema definition with union type
+schema:
+  properties:
+    address:
+      bsonType:
+        - string    # Can be a string like "123 Main St"
+        - object    # Or an object like {street: "Main St", city: "NYC"}
+      presence: 1.0
+      nullable: false
+```
+
+When analyzing collections, `mschema` automatically detects multi-type fields and outputs them as arrays (sorted by frequency, most common first).
 
 ---
 
@@ -396,8 +462,8 @@ mschema drift monitor --schema schemas/users.v1.yml --collection users \
 
 | Error | Solution |
 |-------|----------|
-| `Missing MongoDB URI` | Set in `.mschema.yml` or `SCHEMAGEN_MONGODB_URI` |
-| `Missing default DB` | Set in `.mschema.yml` or `SCHEMAGEN_DEFAULT_DB` |
+| `Missing MongoDB URI` | Set in `.mschema.yml`, `.mschema.local.yml`, or `MSCHEMA_MONGODB_URI` |
+| `Missing default DB` | Set in `.mschema.yml`, `.mschema.local.yml`, or `MSCHEMA_DEFAULT_DB` |
 | `Connection refused` | Check MongoDB is running and URI is correct |
 
 ### Debug Mode

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
 
-from bson import ObjectId
+from bson import Binary, Code, DBRef, Int64, MaxKey, MinKey, ObjectId, Regex, Timestamp
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from mongo_schematic.schema_io import get_schema_block
@@ -20,6 +21,15 @@ TYPE_MAP = {
     "date": datetime,
     "objectId": ObjectId,
     "decimal": Decimal,
+    "long": (int, Int64),
+    "binData": (bytes, Binary),
+    "regex": (Regex, re.Pattern),
+    "timestamp": Timestamp,
+    "minKey": MinKey,
+    "maxKey": MaxKey,
+    "javascript": Code,
+    "dbPointer": DBRef,
+    "null": type(None),
 }
 
 
@@ -135,8 +145,18 @@ def _validate_document(
             continue
         expected = field_def.get("bsonType") if isinstance(field_def, dict) else None
         if expected:
-            expected_type = TYPE_MAP.get(expected)
-            if expected_type and not isinstance(doc.get(field), expected_type):
-                issues.append(f"Type mismatch for {field}: expected {expected}")
+            # Handle both single type (string) and union types (list)
+            if isinstance(expected, list):
+                expected_types = tuple(
+                    t for bson_t in expected 
+                    for t in (TYPE_MAP.get(bson_t) if isinstance(TYPE_MAP.get(bson_t), tuple) else (TYPE_MAP.get(bson_t),))
+                    if t is not None
+                )
+                if expected_types and not isinstance(doc.get(field), expected_types):
+                    issues.append(f"Type mismatch for {field}: expected one of {expected}")
+            else:
+                expected_type = TYPE_MAP.get(expected)
+                if expected_type and not isinstance(doc.get(field), expected_type):
+                    issues.append(f"Type mismatch for {field}: expected {expected}")
 
     return issues

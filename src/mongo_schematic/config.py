@@ -31,6 +31,7 @@ class RuntimeConfig(BaseModel):
 
 
 DEFAULT_CONFIG_PATH = Path.cwd() / ".mschema.yml"
+LOCAL_CONFIG_PATH = Path.cwd() / ".mschema.local.yml"
 
 
 def load_file_config(path: Path = DEFAULT_CONFIG_PATH) -> FileConfig:
@@ -42,17 +43,26 @@ def load_file_config(path: Path = DEFAULT_CONFIG_PATH) -> FileConfig:
 
 
 def load_runtime_config(path: Path = DEFAULT_CONFIG_PATH) -> RuntimeConfig:
+    """Load configuration with priority: env vars > local file > main file."""
+    # Load main config file
     file_config = load_file_config(path)
+    
+    # Load local override file (gitignored, for safe local testing)
+    local_path = path.parent / ".mschema.local.yml" if path != DEFAULT_CONFIG_PATH else LOCAL_CONFIG_PATH
+    local_config = load_file_config(local_path)
+    
+    # Load environment variables
     env_config = EnvConfig()
 
-    mongodb_uri = env_config.mongodb_uri or file_config.mongodb_uri
-    default_db = env_config.default_db or file_config.default_db
-    gemini_api_key = env_config.gemini_api_key or file_config.gemini_api_key
+    # Priority: env > local > file
+    mongodb_uri = env_config.mongodb_uri or local_config.mongodb_uri or file_config.mongodb_uri
+    default_db = env_config.default_db or local_config.default_db or file_config.default_db
+    gemini_api_key = env_config.gemini_api_key or local_config.gemini_api_key or file_config.gemini_api_key
 
     if not mongodb_uri:
-        raise ConfigurationError("Missing MongoDB URI. Set in .mschema.yml or MSCHEMA_MONGODB_URI.")
+        raise ConfigurationError("Missing MongoDB URI. Set in .mschema.yml, .mschema.local.yml, or MSCHEMA_MONGODB_URI.")
     if not default_db:
-        raise ConfigurationError("Missing default DB. Set in .mschema.yml or MSCHEMA_DEFAULT_DB.")
+        raise ConfigurationError("Missing default DB. Set in .mschema.yml, .mschema.local.yml, or MSCHEMA_DEFAULT_DB.")
 
     return RuntimeConfig(
         mongodb_uri=mongodb_uri,

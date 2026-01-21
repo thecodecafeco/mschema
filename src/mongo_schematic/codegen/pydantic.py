@@ -20,16 +20,23 @@ def _get_python_type(bson_type: str) -> str:
         "date": "datetime",
         "array": "List",
         "object": "Dict[str, Any]",
-        "null": "Any",
+        "null": "None",
         "long": "int",
         "decimal": "Decimal",
+        "binData": "bytes",
+        "regex": "str",  # Pattern as string
+        "timestamp": "datetime",
+        "minKey": "Any",
+        "maxKey": "Any",
+        "javascript": "str",
+        "dbPointer": "str",  # Reference as string
     }
     return mapping.get(bson_type, "Any")
 
 def generate_pydantic_code(schema: Dict[str, Any], class_name: str = "Model") -> str:
     """Generate Pydantic model code from schema."""
     lines = [
-        "from typing import Any, Dict, List, Optional",
+        "from typing import Any, Dict, List, Optional, Union",
         "from datetime import datetime",
         "from decimal import Decimal",
         "from pydantic import BaseModel, Field",
@@ -61,8 +68,13 @@ def generate_pydantic_code(schema: Dict[str, Any], class_name: str = "Model") ->
             safe_name = _sanitize_name(field_name)
             bson_type = field_def.get("bsonType", "any")
             
+            # Handle union types (list of bsonTypes)
+            if isinstance(bson_type, list):
+                # Generate Union type for multiple types
+                type_list = [_get_python_type(t) for t in bson_type]
+                python_type = f"Union[{', '.join(type_list)}]"
             # Handle nested objects
-            if bson_type == "object":
+            elif bson_type == "object":
                 nested_name = f"{curr_name}{_to_pascal_case(field_name)}"
                 python_type = nested_name
                 # Enqueue nested model for generation, but we need the sub-schema

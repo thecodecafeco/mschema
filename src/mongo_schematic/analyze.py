@@ -133,12 +133,20 @@ def _generate_schema(field_stats: Dict[str, Dict[str, Any]], total_docs: int) ->
         if not stats["types"]:
             continue
 
-        primary_type = max(stats["types"], key=stats["types"].get)
+        # Get all types sorted by frequency (most common first)
+        sorted_types = sorted(stats["types"].keys(), key=lambda t: stats["types"][t], reverse=True)
+        
+        # Use array if multiple types, single string if only one
+        if len(sorted_types) == 1:
+            bson_type = sorted_types[0]
+        else:
+            bson_type = sorted_types  # List of types
+        
         presence = stats["count"] / total_docs if total_docs else 0
         null_rate = stats["null_count"] / stats["count"] if stats["count"] else 0
 
         schema["properties"][field] = {
-            "bsonType": primary_type,
+            "bsonType": bson_type,
             "presence": round(presence, 4),
             "nullable": null_rate > 0,
         }

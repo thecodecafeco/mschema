@@ -2,6 +2,7 @@ import random
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from bson import Binary, Code, Int64, MaxKey, MinKey, Regex, Timestamp
 from faker import Faker
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -56,6 +57,24 @@ def _generate_value_for_field(field_name: str, field_def: Dict[str, Any]) -> Any
         return [_generate_value_for_field(f"{field_name}_item", {"bsonType": "string"}) for _ in range(random.randint(1, 3))]
     if bson_type == "object":
         return {} # Simplified
+    
+    # New BSON types
+    if bson_type == "long":
+        return Int64(random.randint(0, 1000000))
+    if bson_type == "binData":
+        return Binary(fake.binary(length=16))
+    if bson_type == "regex":
+        return Regex(r"^[a-z]+$", "i")
+    if bson_type == "timestamp":
+        return Timestamp(int(datetime.utcnow().timestamp()), 1)
+    if bson_type == "minKey":
+        return MinKey()
+    if bson_type == "maxKey":
+        return MaxKey()
+    if bson_type == "javascript":
+        return Code("function() { return true; }")
+    if bson_type == "null":
+        return None
     
     return None
 

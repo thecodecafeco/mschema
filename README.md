@@ -9,6 +9,7 @@
 ## Features
 
 - **Schema Inference**: Automatically infer schemas from your MongoDB collections.
+- **Full BSON Support**: All MongoDB types including `binData`, `regex`, `long`, `timestamp`, and union types.
 - **Drift Detection**: Detect when your data deviates from your schema/models.
 - **Code Generation**: Generate Pydantic models (Python) and TypeScript interfaces.
 - **Documentation**: Build static HTML documentation for your database.
