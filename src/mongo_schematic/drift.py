@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from mongo_schematic.diff import diff_schemas
 
@@ -21,6 +21,19 @@ def detect_drift(
         A dict containing diff results plus severity scoring and metrics.
     """
     diff = diff_schemas(expected_schema, observed_schema)
+
+    # Filter out type changes that are compatible (expected allows observed)
+    filtered_changes: List[Dict[str, Any]] = []
+    for change in diff.get("changed_fields", []):
+        from_def = change.get("from", {})
+        to_def = change.get("to", {})
+        if _only_type_changed(from_def, to_def) and _is_type_compatible(from_def, to_def):
+            continue
+        filtered_changes.append(change)
+
+    diff["changed_fields"] = filtered_changes
+    if "summary" in diff and isinstance(diff["summary"], dict):
+        diff["summary"]["changed"] = len(filtered_changes)
 
     severity_items = _classify_severity(diff)
     drift_score = _calculate_drift_score(diff)
@@ -97,6 +110,35 @@ def _classify_severity(diff: Dict[str, Any]) -> List[Dict[str, Any]]:
             })
 
     return items
+
+
+def _normalize_types(definition: Dict[str, Any]) -> Set[str]:
+    if not isinstance(definition, dict):
+        return set()
+    bson_type = definition.get("bsonType")
+    if isinstance(bson_type, list):
+        return {t for t in bson_type if isinstance(t, str)}
+    if isinstance(bson_type, str):
+        return {bson_type}
+    return set()
+
+
+def _only_type_changed(from_def: Dict[str, Any], to_def: Dict[str, Any]) -> bool:
+    if not isinstance(from_def, dict) or not isinstance(to_def, dict):
+        return False
+    return (
+        from_def.get("nullable") == to_def.get("nullable")
+        and from_def.get("presence") == to_def.get("presence")
+        and _normalize_types(from_def) != _normalize_types(to_def)
+    )
+
+
+def _is_type_compatible(expected_def: Dict[str, Any], observed_def: Dict[str, Any]) -> bool:
+    expected_types = _normalize_types(expected_def)
+    observed_types = _normalize_types(observed_def)
+    if not expected_types or not observed_types:
+        return False
+    return observed_types.issubset(expected_types)
 
 
 def _calculate_drift_score(diff: Dict[str, Any]) -> float:

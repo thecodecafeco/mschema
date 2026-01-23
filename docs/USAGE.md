@@ -111,6 +111,51 @@ schema:
 
 When analyzing collections, `mschema` automatically detects multi-type fields and outputs them as arrays (sorted by frequency, most common first).
 
+### Arrays With Item Types (Strict)
+
+To enforce array item types, add an `items` block under the field definition:
+
+```yaml
+schema:
+  properties:
+    tags:
+      bsonType: array
+      items:
+        bsonType: string
+    role_ids:
+      bsonType: array
+      items:
+        bsonType: objectId
+```
+
+Nested object arrays:
+
+```yaml
+schema:
+  properties:
+    addresses:
+      bsonType: array
+      items:
+        bsonType: object
+        properties:
+          street:
+            bsonType: string
+          city:
+            bsonType: string
+          geo:
+            bsonType: object
+            properties:
+              lat:
+                bsonType: double
+              lng:
+                bsonType: double
+```
+
+### Drift vs Validation When Schemas Change
+
+- **Drift** checks whether live data violates the expected schema. If you *widen* types (e.g., add `array` alongside `objectId`), existing data still conforms and drift will not flag it. If you *narrow* types, drift will flag type changes.
+- **Validation** always checks live documents against the current schema. If existing data doesn’t match the new schema, validation will fail until you migrate or update the data, unless the schema still allows the old types.
+
 ---
 
 ## Single Collection Workflows
@@ -227,6 +272,14 @@ mschema migrate apply --plan plans/users.json --to schemas/users.v2.yml \
 # Apply with rate limiting
 mschema migrate apply --plan plans/users.json --to schemas/users.v2.yml \
   --collection users --rate-limit-ms 50
+
+Migration plan support includes:
+
+- Adding/removing fields (with defaults)
+- Type conversions with `$convert`
+- Array wrapping/unwrapping when type changes to/from `array`
+- Array item conversions when `items.bsonType` changes
+- Union type expansions are treated as no‑ops
 
 # Resume from a specific document
 mschema migrate apply --plan plans/users.json --to schemas/users.v2.yml \

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from mongo_schematic.diff import diff_schemas
 from mongo_schematic.schema_io import get_schema_block
@@ -13,11 +13,18 @@ from pymongo import UpdateOne
 from bson import ObjectId
 
 
-def _generate_up_code(diff: Dict[str, Any], to_schema: Dict[str, Any], collection: str) -> str:
+def _generate_up_code(
+    diff: Dict[str, Any],
+    to_schema: Dict[str, Any],
+    collection: str,
+    from_schema: Dict[str, Any] | None = None,
+) -> str:
     """Generate the up() method code based on schema diff."""
     lines: List[str] = []
     schema = get_schema_block(to_schema)
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    source_schema = get_schema_block(from_schema) if from_schema else {}
+    source_props = source_schema.get("properties", {}) if isinstance(source_schema, dict) else {}
     
     added = diff.get("added_fields", [])
     removed = diff.get("removed_fields", [])
@@ -54,31 +61,152 @@ def _generate_up_code(diff: Dict[str, Any], to_schema: Dict[str, Any], collectio
             lines.append(f"        )")
             lines.append("")
     
+    # Handle required field additions
+    to_required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
+    from_required = set(source_schema.get("required", [])) if isinstance(source_schema, dict) else set()
+    new_required = sorted(to_required - from_required)
+
+    for field in new_required:
+        field_def = properties.get(field, {}) if isinstance(properties.get(field), dict) else {}
+        default = field_def.get("default")
+        if default is not None:
+            default_repr = json.dumps(default)
+            lines.append(f"        # Fill missing required field '{field}' with default")
+            lines.append(f"        await coll.update_many(")
+            lines.append(f"            {{'$or': [{{'{field}': {{'$exists': False}}}}, {{'{field}': None}}]}},")
+            lines.append(f"            {{'$set': {{'{field}': {default_repr}}}}}")
+            lines.append(f"        )")
+            lines.append("")
+        else:
+            lines.append(f"        # Required field '{field}' has no default; manual backfill required")
+            lines.append("")
+
+    # Handle nullable -> non-nullable changes
+    for field, to_def in properties.items():
+        if field not in source_props:
+            continue
+        from_def = source_props.get(field, {}) if isinstance(source_props.get(field), dict) else {}
+        if from_def.get("nullable") is True and to_def.get("nullable") is False:
+            default = to_def.get("default")
+            if default is not None:
+                default_repr = json.dumps(default)
+                lines.append(f"        # Fill nulls for '{field}' with default")
+                lines.append(f"        await coll.update_many(")
+                lines.append(f"            {{'{field}': None}},")
+                lines.append(f"            {{'$set': {{'{field}': {default_repr}}}}}")
+                lines.append(f"        )")
+                lines.append("")
+            else:
+                lines.append(f"        # '{field}' is now non-nullable; manual backfill required")
+                lines.append("")
+
     # Handle type conversions
     for change in changed:
         field = change.get("field", "unknown")
+        from_def = change.get("from", {})
         to_def = change.get("to", {})
+        from_type = from_def.get("bsonType") if isinstance(from_def, dict) else None
         to_type = to_def.get("bsonType") if isinstance(to_def, dict) else None
         
-        if to_type:
-            mongo_type = _bson_to_mongo_convert_type(to_type)
-            lines.append(f"        # Convert '{field}' to {to_type}")
+        if not to_type:
+            continue
+
+        if isinstance(to_type, list):
+            if _normalize_types(from_def).issubset(_normalize_types(to_def)):
+                lines.append(f"        # '{field}' widened to union {to_type}; no data migration needed")
+                lines.append("")
+                continue
+            lines.append(f"        # '{field}' changed to union {to_type}; manual migration required")
+            lines.append("")
+            continue
+
+        if to_type == "array" and from_type != "array":
+            lines.append(f"        # Wrap '{field}' into array")
             lines.append(f"        await coll.update_many(")
             lines.append(f"            {{'{field}': {{'$exists': True}}}},")
             lines.append(f"            [{{")
             lines.append(f"                '$set': {{")
             lines.append(f"                    '{field}': {{")
-            lines.append(f"                        '$convert': {{")
-            lines.append(f"                            'input': '${field}',")
-            lines.append(f"                            'to': '{mongo_type}',")
-            lines.append(f"                            'onError': '${field}',")
-            lines.append(f"                            'onNull': None")
-            lines.append(f"                        }}")
+            lines.append(f"                        '$cond': [")
+            lines.append(f"                            {{'$isArray': '${field}'}},")
+            lines.append(f"                            '${field}',")
+            lines.append(f"                            ['${field}']")
+            lines.append(f"                        ]")
             lines.append(f"                    }}")
             lines.append(f"                }}")
             lines.append(f"            }}]")
             lines.append(f"        )")
             lines.append("")
+            continue
+
+        if from_type == "array" and to_type != "array":
+            lines.append(f"        # Unwrap '{field}' from array")
+            lines.append(f"        await coll.update_many(")
+            lines.append(f"            {{'{field}': {{'$exists': True}}}},")
+            lines.append(f"            [{{")
+            lines.append(f"                '$set': {{")
+            lines.append(f"                    '{field}': {{")
+            lines.append(f"                        '$cond': [")
+            lines.append(f"                            {{'$isArray': '${field}'}},")
+            lines.append(f"                            {{'$arrayElemAt': ['${field}', 0]}},")
+            lines.append(f"                            '${field}'")
+            lines.append(f"                        ]")
+            lines.append(f"                    }}")
+            lines.append(f"                }}")
+            lines.append(f"            }}]")
+            lines.append(f"        )")
+            lines.append("")
+            continue
+
+        if to_type == "array" and from_type == "array":
+            from_item = _get_items_bson_type(from_def)
+            to_item = _get_items_bson_type(to_def)
+            if from_item and to_item and from_item != to_item and isinstance(to_item, str):
+                mongo_type = _bson_to_mongo_convert_type(to_item)
+                lines.append(f"        # Convert '{field}' array items to {to_item}")
+                lines.append(f"        await coll.update_many(")
+                lines.append(f"            {{'{field}': {{'$exists': True}}}},")
+                lines.append(f"            [{{")
+                lines.append(f"                '$set': {{")
+                lines.append(f"                    '{field}': {{")
+                lines.append(f"                        '$cond': [")
+                lines.append(f"                            {{'$isArray': '${field}'}},")
+                lines.append(f"                            {{'$map': {{")
+                lines.append(f"                                'input': '${field}',")
+                lines.append(f"                                'as': 'item',")
+                lines.append(f"                                'in': {{")
+                lines.append(
+                    f"                                    '$convert': {{'input': '$$item', 'to': '{mongo_type}', 'onError': '$$item', 'onNull': None}}"
+                )
+                lines.append(f"                                }}")
+                lines.append(f"                            }}},")
+                lines.append(f"                            '${field}'")
+                lines.append(f"                        ]")
+                lines.append(f"                    }}")
+                lines.append(f"                }}")
+                lines.append(f"            }}]")
+                lines.append(f"        )")
+                lines.append("")
+                continue
+
+        mongo_type = _bson_to_mongo_convert_type(to_type)
+        lines.append(f"        # Convert '{field}' to {to_type}")
+        lines.append(f"        await coll.update_many(")
+        lines.append(f"            {{'{field}': {{'$exists': True}}}},")
+        lines.append(f"            [{{")
+        lines.append(f"                '$set': {{")
+        lines.append(f"                    '{field}': {{")
+        lines.append(f"                        '$convert': {{")
+        lines.append(f"                            'input': '${field}',")
+        lines.append(f"                            'to': '{mongo_type}',")
+        lines.append(f"                            'onError': '${field}',")
+        lines.append(f"                            'onNull': None")
+        lines.append(f"                        }}")
+        lines.append(f"                    }}")
+        lines.append(f"                }}")
+        lines.append(f"            }}]")
+        lines.append(f"        )")
+        lines.append("")
     
     # Handle removed fields (commented out for safety)
     for field in removed:
@@ -131,26 +259,73 @@ def _generate_down_code(diff: Dict[str, Any], from_schema: Dict[str, Any], colle
         field = change.get("field", "unknown")
         from_def = change.get("from", {})
         from_type = from_def.get("bsonType") if isinstance(from_def, dict) else None
+        to_def = change.get("to", {})
+        to_type = to_def.get("bsonType") if isinstance(to_def, dict) else None
         
-        if from_type:
-            mongo_type = _bson_to_mongo_convert_type(from_type)
-            lines.append(f"        # Revert '{field}' to {from_type}")
+        if not from_type:
+            continue
+
+        if isinstance(from_type, list):
+            lines.append(f"        # '{field}' reverted to union {from_type}; manual rollback required")
+            lines.append("")
+            continue
+
+        if from_type == "array" and to_type != "array":
+            lines.append(f"        # Wrap '{field}' into array (rollback)")
             lines.append(f"        await coll.update_many(")
             lines.append(f"            {{'{field}': {{'$exists': True}}}},")
             lines.append(f"            [{{")
             lines.append(f"                '$set': {{")
             lines.append(f"                    '{field}': {{")
-            lines.append(f"                        '$convert': {{")
-            lines.append(f"                            'input': '${field}',")
-            lines.append(f"                            'to': '{mongo_type}',")
-            lines.append(f"                            'onError': '${field}',")
-            lines.append(f"                            'onNull': None")
-            lines.append(f"                        }}")
+            lines.append(f"                        '$cond': [")
+            lines.append(f"                            {{'$isArray': '${field}'}},")
+            lines.append(f"                            '${field}',")
+            lines.append(f"                            ['${field}']")
+            lines.append(f"                        ]")
             lines.append(f"                    }}")
             lines.append(f"                }}")
             lines.append(f"            }}]")
             lines.append(f"        )")
             lines.append("")
+            continue
+
+        if from_type != "array" and to_type == "array":
+            lines.append(f"        # Unwrap '{field}' from array (rollback)")
+            lines.append(f"        await coll.update_many(")
+            lines.append(f"            {{'{field}': {{'$exists': True}}}},")
+            lines.append(f"            [{{")
+            lines.append(f"                '$set': {{")
+            lines.append(f"                    '{field}': {{")
+            lines.append(f"                        '$cond': [")
+            lines.append(f"                            {{'$isArray': '${field}'}},")
+            lines.append(f"                            {{'$arrayElemAt': ['${field}', 0]}},")
+            lines.append(f"                            '${field}'")
+            lines.append(f"                        ]")
+            lines.append(f"                    }}")
+            lines.append(f"                }}")
+            lines.append(f"            }}]")
+            lines.append(f"        )")
+            lines.append("")
+            continue
+
+        mongo_type = _bson_to_mongo_convert_type(from_type)
+        lines.append(f"        # Revert '{field}' to {from_type}")
+        lines.append(f"        await coll.update_many(")
+        lines.append(f"            {{'{field}': {{'$exists': True}}}},")
+        lines.append(f"            [{{")
+        lines.append(f"                '$set': {{")
+        lines.append(f"                    '{field}': {{")
+        lines.append(f"                        '$convert': {{")
+        lines.append(f"                            'input': '${field}',")
+        lines.append(f"                            'to': '{mongo_type}',")
+        lines.append(f"                            'onError': '${field}',")
+        lines.append(f"                            'onNull': None")
+        lines.append(f"                        }}")
+        lines.append(f"                    }}")
+        lines.append(f"                }}")
+        lines.append(f"            }}]")
+        lines.append(f"        )")
+        lines.append("")
     
     return "\n".join(lines)
 
@@ -185,6 +360,26 @@ def _bson_to_mongo_convert_type(bson_type: str) -> str:
     return mapping.get(bson_type, "string")
 
 
+def _normalize_types(definition: Dict[str, Any]) -> Set[str]:
+    if not isinstance(definition, dict):
+        return set()
+    bson_type = definition.get("bsonType")
+    if isinstance(bson_type, list):
+        return {t for t in bson_type if isinstance(t, str)}
+    if isinstance(bson_type, str):
+        return {bson_type}
+    return set()
+
+
+def _get_items_bson_type(field_def: Dict[str, Any]) -> Any:
+    if not isinstance(field_def, dict):
+        return None
+    items = field_def.get("items")
+    if isinstance(items, dict):
+        return items.get("bsonType")
+    return None
+
+
 def generate_migration_file(
     from_schema: Dict[str, Any],
     to_schema: Dict[str, Any],
@@ -205,7 +400,7 @@ def generate_migration_file(
     diff = diff_schemas(from_schema, to_schema)
     generated_at = datetime.utcnow().isoformat()
     
-    up_code = _generate_up_code(diff, to_schema, collection)
+    up_code = _generate_up_code(diff, to_schema, collection, from_schema)
     down_code = _generate_down_code(diff, from_schema, collection)
     
     meta = {
@@ -265,19 +460,81 @@ __metadata__ = {repr(meta)}
 
 def generate_migration_plan(from_schema: Dict[str, Any], to_schema: Dict[str, Any]) -> Dict[str, Any]:
     diff = diff_schemas(from_schema, to_schema)
+    source_schema = get_schema_block(from_schema)
+    target_schema = get_schema_block(to_schema)
+    source_props = source_schema.get("properties", {}) if isinstance(source_schema, dict) else {}
+    target_props = target_schema.get("properties", {}) if isinstance(target_schema, dict) else {}
+    source_required = set(source_schema.get("required", [])) if isinstance(source_schema, dict) else set()
+    target_required = set(target_schema.get("required", [])) if isinstance(target_schema, dict) else set()
     steps = []
     for field in diff.get("added_fields", []):
         steps.append({"action": "add_field", "field": field, "details": {}})
     for field in diff.get("removed_fields", []):
         steps.append({"action": "remove_field", "field": field, "details": {}})
     for change in diff.get("changed_fields", []):
-        steps.append(
-            {
-                "action": "convert_type",
-                "field": change["field"],
-                "details": {"from": change.get("from"), "to": change.get("to")},
-            }
-        )
+        field = change["field"]
+        from_def = change.get("from", {}) if isinstance(change.get("from"), dict) else {}
+        to_def = change.get("to", {}) if isinstance(change.get("to"), dict) else {}
+        from_types = _normalize_types(from_def)
+        to_types = _normalize_types(to_def)
+
+        if "array" in to_types and "array" not in from_types and to_types == {"array"}:
+            steps.append({"action": "wrap_in_array", "field": field, "details": {"from": from_def, "to": to_def}})
+            continue
+        if "array" in from_types and "array" not in to_types and from_types == {"array"}:
+            steps.append({"action": "unwrap_array", "field": field, "details": {"from": from_def, "to": to_def}})
+            continue
+        if from_types and to_types and to_types.issuperset(from_types) and from_types != to_types:
+            steps.append({"action": "expand_type", "field": field, "details": {"from": from_def, "to": to_def}})
+            continue
+        if from_types and to_types and from_types.issuperset(to_types) and from_types != to_types and len(to_types) == 1:
+            steps.append({"action": "convert_type", "field": field, "details": {"from": from_def, "to": to_def}})
+            continue
+
+        if _array_items_changed(from_def, to_def):
+            steps.append({
+                "action": "convert_array_items",
+                "field": field,
+                "details": {"from": from_def, "to": to_def},
+            })
+            continue
+
+        if len(to_types) == 1:
+            steps.append({"action": "convert_type", "field": field, "details": {"from": from_def, "to": to_def}})
+            continue
+
+        steps.append({"action": "review_type_change", "field": field, "details": {"from": from_def, "to": to_def}})
+
+    existing = {step.get("field") for step in steps}
+    for field, to_def in target_props.items():
+        if field in existing:
+            continue
+        from_def = source_props.get(field, {}) if isinstance(source_props.get(field), dict) else {}
+        if _array_items_changed(from_def, to_def):
+            steps.append({
+                "action": "convert_array_items",
+                "field": field,
+                "details": {"from": from_def, "to": to_def},
+            })
+
+    # Required fields added
+    for field in sorted(target_required - source_required):
+        field_def = target_props.get(field, {}) if isinstance(target_props.get(field), dict) else {}
+        if field_def.get("default") is not None:
+            steps.append({"action": "fill_missing", "field": field, "details": {"default": field_def.get("default")}})
+        else:
+            steps.append({"action": "review_required", "field": field, "details": {}})
+
+    # Nullable -> non-nullable changes
+    for field, to_def in target_props.items():
+        if not isinstance(to_def, dict):
+            continue
+        from_def = source_props.get(field, {}) if isinstance(source_props.get(field), dict) else {}
+        if from_def.get("nullable") is True and to_def.get("nullable") is False:
+            if to_def.get("default") is not None:
+                steps.append({"action": "fill_nulls", "field": field, "details": {"default": to_def.get("default")}})
+            else:
+                steps.append({"action": "review_nulls", "field": field, "details": {}})
     return {
         "strategy": "eager",
         "batch_size": 1000,
@@ -343,6 +600,44 @@ async def apply_migration_plan(
             summary["updated"] += updated
             continue
 
+        if action == "fill_missing":
+            default = _get_default_value(properties, field)
+            if default is None:
+                step_results.append({"action": action, "field": field, "skipped": True})
+                summary["skipped"] += 1
+                continue
+            updated, last_id = await _batched_update(
+                coll,
+                {"$or": [{field: {"$exists": False}}, {field: None}]},
+                {"$set": {field: default}},
+                batch_size,
+                dry_run,
+                rate_limit_ms,
+                resume_value,
+            )
+            step_results.append({"action": action, "field": field, "updated": updated, "last_id": last_id})
+            summary["updated"] += updated
+            continue
+
+        if action == "fill_nulls":
+            default = _get_default_value(properties, field)
+            if default is None:
+                step_results.append({"action": action, "field": field, "skipped": True})
+                summary["skipped"] += 1
+                continue
+            updated, last_id = await _batched_update(
+                coll,
+                {field: None},
+                {"$set": {field: default}},
+                batch_size,
+                dry_run,
+                rate_limit_ms,
+                resume_value,
+            )
+            step_results.append({"action": action, "field": field, "updated": updated, "last_id": last_id})
+            summary["updated"] += updated
+            continue
+
         if action == "remove_field":
             updated, last_id = await _batched_update(
                 coll,
@@ -361,14 +656,83 @@ async def apply_migration_plan(
 
         if action == "convert_type":
             to_type = _get_bson_type(properties, field)
+            to_type = _primary_bson_type(to_type)
             if not to_type:
                 step_results.append({"action": action, "field": field, "skipped": True})
                 summary["skipped"] += 1
+                continue
+            if to_type == "null":
+                updated, last_id = await _batched_update(
+                    coll,
+                    {field: {"$exists": True}},
+                    {"$set": {field: None}},
+                    batch_size,
+                    dry_run,
+                    rate_limit_ms,
+                    resume_value,
+                )
+                step_results.append(
+                    {"action": action, "field": field, "updated": updated, "last_id": last_id}
+                )
+                summary["updated"] += updated
                 continue
             updated, last_id = await _batched_convert(
                 coll,
                 field,
                 to_type,
+                batch_size,
+                dry_run,
+                rate_limit_ms,
+                resume_value,
+            )
+            step_results.append(
+                {"action": action, "field": field, "updated": updated, "last_id": last_id}
+            )
+            summary["updated"] += updated
+            continue
+
+        if action == "wrap_in_array":
+            updated, last_id = await _batched_update(
+                coll,
+                {field: {"$exists": True}},
+                _wrap_in_array_pipeline(field),
+                batch_size,
+                dry_run,
+                rate_limit_ms,
+                resume_value,
+            )
+            step_results.append(
+                {"action": action, "field": field, "updated": updated, "last_id": last_id}
+            )
+            summary["updated"] += updated
+            continue
+
+        if action == "unwrap_array":
+            updated, last_id = await _batched_update(
+                coll,
+                {field: {"$exists": True}},
+                _unwrap_array_pipeline(field),
+                batch_size,
+                dry_run,
+                rate_limit_ms,
+                resume_value,
+            )
+            step_results.append(
+                {"action": action, "field": field, "updated": updated, "last_id": last_id}
+            )
+            summary["updated"] += updated
+            continue
+
+        if action == "convert_array_items":
+            to_item = _primary_bson_type(_get_items_bson_type(properties.get(field, {})))
+            if not to_item:
+                step_results.append({"action": action, "field": field, "skipped": True})
+                summary["skipped"] += 1
+                continue
+            updated, last_id = await _batched_update(
+                coll,
+                {field: {"$exists": True}},
+                _array_items_convert_pipeline(field, to_item),
                 batch_size,
                 dry_run,
                 rate_limit_ms,
@@ -401,6 +765,11 @@ async def apply_migration_plan(
             summary["updated"] += updated
             continue
 
+        if action in {"expand_type", "review_type_change", "review_required", "review_nulls"}:
+            step_results.append({"action": action, "field": field, "skipped": True})
+            summary["skipped"] += 1
+            continue
+
         step_results.append({"action": action, "field": field, "skipped": True})
         summary["skipped"] += 1
 
@@ -413,8 +782,32 @@ def _get_default(properties: Dict[str, Any], field: str) -> Any:
         return field_def.get("default")
     return None
 
+def _get_default_value(properties: Dict[str, Any], field: str) -> Any:
+    field_def = properties.get(field)
+    if isinstance(field_def, dict) and field_def.get("default") is not None:
+        return field_def.get("default")
+    bson_type = _get_bson_type(properties, field)
+    bson_type = _primary_bson_type(bson_type)
+    if not bson_type:
+        return None
+    return _default_value_for_bson_type(bson_type)
 
-def _get_bson_type(properties: Dict[str, Any], field: str) -> str | None:
+
+def _default_value_for_bson_type(bson_type: str) -> Any:
+    defaults = {
+        "string": "",
+        "int": 0,
+        "double": 0.0,
+        "bool": False,
+        "array": [],
+        "object": {},
+        "date": datetime.utcnow(),
+        "null": None,
+    }
+    return defaults.get(bson_type)
+
+
+def _get_bson_type(properties: Dict[str, Any], field: str) -> Any:
     field_def = properties.get(field)
     if isinstance(field_def, dict):
         return field_def.get("bsonType")
@@ -424,7 +817,7 @@ def _get_bson_type(properties: Dict[str, Any], field: str) -> str | None:
 async def _batched_update(
     coll,
     query: Dict[str, Any],
-    update: Dict[str, Any],
+    update: Any,
     batch_size: int,
     dry_run: bool,
     rate_limit_ms: int,
@@ -511,6 +904,89 @@ async def _batched_convert(
         updated += result.modified_count
 
     return updated, last_id
+
+
+def _primary_bson_type(bson_type: Any) -> str | None:
+    if isinstance(bson_type, list):
+        for t in bson_type:
+            if isinstance(t, str):
+                return t
+        return None
+    if isinstance(bson_type, str):
+        return bson_type
+    return None
+
+
+def _array_items_changed(from_def: Dict[str, Any], to_def: Dict[str, Any]) -> bool:
+    if not isinstance(from_def, dict) or not isinstance(to_def, dict):
+        return False
+    if from_def.get("bsonType") != "array" or to_def.get("bsonType") != "array":
+        return False
+    from_item = _get_items_bson_type(from_def)
+    to_item = _get_items_bson_type(to_def)
+    return bool(from_item and to_item and from_item != to_item)
+
+
+def _wrap_in_array_pipeline(field: str) -> List[Dict[str, Any]]:
+    return [
+        {
+            "$set": {
+                field: {
+                    "$cond": [
+                        {"$isArray": f"${field}"},
+                        f"${field}",
+                        [f"${field}"]
+                    ]
+                }
+            }
+        }
+    ]
+
+
+def _unwrap_array_pipeline(field: str) -> List[Dict[str, Any]]:
+    return [
+        {
+            "$set": {
+                field: {
+                    "$cond": [
+                        {"$isArray": f"${field}"},
+                        {"$arrayElemAt": [f"${field}", 0]},
+                        f"${field}",
+                    ]
+                }
+            }
+        }
+    ]
+
+
+def _array_items_convert_pipeline(field: str, to_item_type: str) -> List[Dict[str, Any]]:
+    mongo_type = _bson_to_mongo_convert_type(to_item_type)
+    return [
+        {
+            "$set": {
+                field: {
+                    "$cond": [
+                        {"$isArray": f"${field}"},
+                        {
+                            "$map": {
+                                "input": f"${field}",
+                                "as": "item",
+                                "in": {
+                                    "$convert": {
+                                        "input": "$$item",
+                                        "to": mongo_type,
+                                        "onError": "$$item",
+                                        "onNull": None,
+                                    }
+                                },
+                            }
+                        },
+                        f"${field}",
+                    ]
+                }
+            }
+        }
+    ]
 
 
 async def _sleep_ms(ms: int) -> None:

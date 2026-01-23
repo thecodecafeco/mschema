@@ -33,6 +33,57 @@ TYPE_MAP = {
 }
 
 
+def _expected_python_types(expected: Any) -> Tuple[type, ...]:
+    if isinstance(expected, list):
+        expected_types: List[type] = []
+        for bson_t in expected:
+            mapped = TYPE_MAP.get(bson_t)
+            if mapped is None:
+                continue
+            if isinstance(mapped, tuple):
+                expected_types.extend(list(mapped))
+            else:
+                expected_types.append(mapped)
+        return tuple(expected_types)
+    mapped = TYPE_MAP.get(expected)
+    if mapped is None:
+        return tuple()
+    return mapped if isinstance(mapped, tuple) else (mapped,)
+
+
+def _build_validator_field(field_def: Dict[str, Any]) -> Dict[str, Any]:
+    bson_type = field_def.get("bsonType")
+    if not bson_type:
+        return {}
+
+    validator: Dict[str, Any] = {"bsonType": bson_type}
+
+    if bson_type == "array":
+        items_def = field_def.get("items")
+        if isinstance(items_def, dict) and items_def.get("bsonType"):
+            items_validator: Dict[str, Any] = {"bsonType": items_def.get("bsonType")}
+            if items_def.get("bsonType") == "object" and isinstance(items_def.get("properties"), dict):
+                item_props = {
+                    k: _build_validator_field(v)
+                    for k, v in items_def.get("properties", {}).items()
+                    if isinstance(v, dict)
+                }
+                if item_props:
+                    items_validator["properties"] = item_props
+            validator["items"] = items_validator
+
+    if bson_type == "object" and isinstance(field_def.get("properties"), dict):
+        obj_props = {
+            k: _build_validator_field(v)
+            for k, v in field_def.get("properties", {}).items()
+            if isinstance(v, dict)
+        }
+        if obj_props:
+            validator["properties"] = obj_props
+
+    return validator
+
+
 async def validate_collection(
     client: AsyncIOMotorClient,
     database: str,
@@ -97,7 +148,7 @@ def build_mongo_validator(schema_payload: Dict[str, Any]) -> Dict[str, Any]:
     validator_properties: Dict[str, Any] = {}
     for field, field_def in properties.items():
         if isinstance(field_def, dict) and field_def.get("bsonType"):
-            validator_properties[field] = {"bsonType": field_def["bsonType"]}
+            validator_properties[field] = _build_validator_field(field_def)
 
     return {
         "$jsonSchema": {
@@ -143,20 +194,51 @@ def _validate_document(
     for field, field_def in properties.items():
         if field not in doc or doc.get(field) is None:
             continue
-        expected = field_def.get("bsonType") if isinstance(field_def, dict) else None
-        if expected:
-            # Handle both single type (string) and union types (list)
-            if isinstance(expected, list):
-                expected_types = tuple(
-                    t for bson_t in expected 
-                    for t in (TYPE_MAP.get(bson_t) if isinstance(TYPE_MAP.get(bson_t), tuple) else (TYPE_MAP.get(bson_t),))
-                    if t is not None
-                )
-                if expected_types and not isinstance(doc.get(field), expected_types):
-                    issues.append(f"Type mismatch for {field}: expected one of {expected}")
-            else:
-                expected_type = TYPE_MAP.get(expected)
-                if expected_type and not isinstance(doc.get(field), expected_type):
-                    issues.append(f"Type mismatch for {field}: expected {expected}")
+        issues.extend(_validate_value(field, doc.get(field), field_def))
+
+    return issues
+
+
+def _validate_value(path: str, value: Any, field_def: Dict[str, Any]) -> List[str]:
+    issues: List[str] = []
+    expected = field_def.get("bsonType") if isinstance(field_def, dict) else None
+    if not expected:
+        return issues
+
+    expected_types = _expected_python_types(expected)
+    if expected_types and not isinstance(value, expected_types):
+        issues.append(f"Type mismatch for {path}: expected {expected}")
+        return issues
+
+    # Validate object properties recursively
+    if expected == "object" and isinstance(value, dict):
+        props = field_def.get("properties")
+        if isinstance(props, dict):
+            for key, sub_def in props.items():
+                if key not in value or value.get(key) is None:
+                    continue
+                if isinstance(sub_def, dict):
+                    issues.extend(_validate_value(f"{path}.{key}", value.get(key), sub_def))
+
+    # Strict array item validation when items are defined
+    if expected == "array" and isinstance(value, list):
+        items_def = field_def.get("items")
+        if isinstance(items_def, dict) and items_def.get("bsonType"):
+            item_expected = items_def.get("bsonType")
+            item_types = _expected_python_types(item_expected)
+            for idx, item in enumerate(value):
+                if item_types and not isinstance(item, item_types):
+                    issues.append(f"Type mismatch for {path}[{idx}]: expected {item_expected}")
+                    continue
+                if item_expected == "object" and isinstance(item, dict):
+                    item_props = items_def.get("properties")
+                    if isinstance(item_props, dict):
+                        for key, sub_def in item_props.items():
+                            if key not in item or item.get(key) is None:
+                                continue
+                            if isinstance(sub_def, dict):
+                                issues.extend(
+                                    _validate_value(f"{path}[{idx}].{key}", item.get(key), sub_def)
+                                )
 
     return issues
