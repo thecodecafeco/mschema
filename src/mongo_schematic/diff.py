@@ -38,7 +38,23 @@ def _field_signature(field_def: Any) -> Any:
     if not isinstance(field_def, dict):
         return field_def
     return {
-        "bsonType": field_def.get("bsonType"),
+        "bsonType": _normalize_bson_type(field_def.get("bsonType")),
         "nullable": field_def.get("nullable"),
         "presence": field_def.get("presence"),
     }
+
+
+def _normalize_bson_type(bson_type: Any) -> Any:
+    if isinstance(bson_type, list):
+        normalized: List[str] = []
+        for entry in bson_type:
+            if entry is None:
+                normalized.append("null")
+            elif isinstance(entry, str):
+                normalized.append(entry)
+        return sorted(normalized)
+    if bson_type is None:
+        return "null"
+    if isinstance(bson_type, str):
+        return bson_type
+    return bson_type
