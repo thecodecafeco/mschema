@@ -549,6 +549,11 @@ def db_drift(
     uri: Optional[str] = typer.Option(None, "--uri", help="MongoDB URI"),
     db: Optional[str] = typer.Option(None, "--db", help="Database name"),
     sample: int = typer.Option(5000, "--sample", help="Sample size per collection"),
+    fail_on_critical: bool = typer.Option(
+        False,
+        "--fail-on-critical",
+        help="Exit non-zero only if critical drift is detected",
+    ),
 ) -> None:
     """Detect drift across all collections in the database."""
     async def _run() -> None:
@@ -588,8 +593,12 @@ def db_drift(
         print_json(results)
         client.close()
         
-        if results["summary"]["with_drift"] > 0:
-            raise typer.Exit(code=1)
+        if fail_on_critical:
+            if results["summary"]["critical"] > 0:
+                raise typer.Exit(code=1)
+        else:
+            if results["summary"]["with_drift"] > 0:
+                raise typer.Exit(code=1)
 
     asyncio.run(_run())
 
