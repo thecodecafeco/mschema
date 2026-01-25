@@ -1,6 +1,6 @@
 [project]
 name = "mongo-schematic"
-version = "0.1.4.3"
+version = "0.1.4.4"
 description = "MongoSchematic CLI for MongoDB schema analysis, drift detection, and migrations"
 readme = "README.md"
 requires-python = ">=3.10"
