@@ -111,6 +111,13 @@ def _generate_up_code(
         if not to_type:
             continue
 
+        if _normalize_types(from_def) == _normalize_types(to_def):
+            if _array_items_changed(from_def, to_def):
+                continue
+            lines.append(f"        # '{field}' type unchanged; no migration needed")
+            lines.append("")
+            continue
+
         if isinstance(to_type, list):
             if _normalize_types(from_def).issubset(_normalize_types(to_def)):
                 lines.append(f"        # '{field}' widened to union {to_type}; no data migration needed")
@@ -179,7 +186,7 @@ def _generate_up_code(
                     f"                                    '$convert': {{'input': '$$item', 'to': '{mongo_type}', 'onError': '$$item', 'onNull': None}}"
                 )
                 lines.append(f"                                }}")
-                lines.append(f"                            }}},")
+                lines.append("                            }},")
                 lines.append(f"                            '${field}'")
                 lines.append(f"                        ]")
                 lines.append(f"                    }}")
@@ -263,6 +270,13 @@ def _generate_down_code(diff: Dict[str, Any], from_schema: Dict[str, Any], colle
         to_type = to_def.get("bsonType") if isinstance(to_def, dict) else None
         
         if not from_type:
+            continue
+
+        if _normalize_types(from_def) == _normalize_types(to_def):
+            if _array_items_changed(from_def, to_def):
+                continue
+            lines.append(f"        # '{field}' type unchanged; no rollback needed")
+            lines.append("")
             continue
 
         if isinstance(from_type, list):
