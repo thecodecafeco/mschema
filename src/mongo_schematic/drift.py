@@ -83,14 +83,27 @@ def _classify_severity(diff: Dict[str, Any]) -> List[Dict[str, Any]]:
         to_type = to_def.get("bsonType") if isinstance(to_def, dict) else None
 
         if from_type and to_type and from_type != to_type:
-            items.append({
-                "level": "critical",
-                "type": "type_changed",
-                "field": field,
-                "message": f"Type changed for '{field}': {from_type} -> {to_type}",
-                "from_type": from_type,
-                "to_type": to_type,
-            })
+            if _is_type_compatible(from_def, to_def):
+                from_presence = from_def.get("presence", 0) if isinstance(from_def, dict) else 0
+                to_presence = to_def.get("presence", 0) if isinstance(to_def, dict) else 0
+                delta = abs(to_presence - from_presence)
+                level = "warning" if delta > 0.2 else "info"
+                items.append({
+                    "level": level,
+                    "type": "field_changed",
+                    "field": field,
+                    "message": f"Field '{field}' definition changed",
+                    "presence_delta": round(delta, 4),
+                })
+            else:
+                items.append({
+                    "level": "critical",
+                    "type": "type_changed",
+                    "field": field,
+                    "message": f"Type changed for '{field}': {from_type} -> {to_type}",
+                    "from_type": from_type,
+                    "to_type": to_type,
+                })
         else:
             from_presence = from_def.get("presence", 0) if isinstance(from_def, dict) else 0
             to_presence = to_def.get("presence", 0) if isinstance(to_def, dict) else 0
@@ -117,9 +130,17 @@ def _normalize_types(definition: Dict[str, Any]) -> Set[str]:
         return set()
     bson_type = definition.get("bsonType")
     if isinstance(bson_type, list):
-        return {t for t in bson_type if isinstance(t, str)}
+        normalized: Set[str] = set()
+        for entry in bson_type:
+            if entry is None:
+                normalized.add("null")
+            elif isinstance(entry, str):
+                normalized.add(entry)
+        return normalized
     if isinstance(bson_type, str):
         return {bson_type}
+    if bson_type is None:
+        return {"null"}
     return set()
 
 
@@ -162,7 +183,7 @@ def _calculate_drift_score(diff: Dict[str, Any]) -> float:
         from_type = from_def.get("bsonType") if isinstance(from_def, dict) else None
         to_type = to_def.get("bsonType") if isinstance(to_def, dict) else None
 
-        if from_type and to_type and from_type != to_type:
+        if from_type and to_type and from_type != to_type and not _is_type_compatible(from_def, to_def):
             score += 0.25
         else:
             score += 0.1
